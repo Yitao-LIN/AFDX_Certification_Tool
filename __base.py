@@ -57,6 +57,7 @@ class Edge:
         self.to = to
         self.load_direct  = 0
         self.load_reverse = 0
+        self.capacity = 100  # 100 Mbps TODO: Generalize to the xml file
 
 """ Target
     The Target class is used to handle targets
@@ -71,13 +72,13 @@ class Target:
     The Flow class is used to handle flows
 """
 class Flow:
-    targets = []
     def __init__(self, name, source, payload, overhead, period):
         self.name = name
         self.source = source
         self.payload = payload
         self.overhead = overhead
-        self.period = period    
+        self.period = period
+        self.targets = []
 
 ################################################################@
 """ Local methods """
@@ -211,13 +212,12 @@ def loadCalculus(edges, flows):
             for target in flow.targets:
                 for pair_index in range(len(target.path)-1):
                     if edge.frm == target.path[pair_index] and edge.to == target.path[pair_index+1]:
-                        edge.load_direct += (flow.payload + flow.overhead)/flow.period * 1E-6 * 8
+                        edge.load_direct += (flow.payload + flow.overhead)/flow.period * 1E-6 * 8 /edge.capacity
                         # print(flow.name, "loaded on ", edge.name, "from ", edge.frm, "to", edge.to, "with", (flow.payload + flow.overhead)/flow.period * 1E-6, "Mbps")
                     elif edge.to == target.path[pair_index] and edge.frm == target.path[pair_index+1]:
-                        edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 1E-6 * 8
-                        # print(flow.name, "loaded on ", edge.name, "from ", edge.to, "to", edge.frm, "with", (flow.payload + flow.overhead)/flow.period * 1E-6, "Mbps")
-        if edge.load_direct > 100:
-            print("\n !! capacity exceeded !! name: ", edge.name, " load_direct: ", edge.load_direct, " load_reverse: ", edge.load_reverse, "\n")
+                        edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 1E-6 * 8 /edge.capacity
+                        # print(flow.name, "loaded on ", edge.name, "from ", edge.to, "to", edge.frm, "with", (flow.payload + flow.overhead)/flow.period * 1E-6, "Mbps")    
+        print("\n Network load {} load_direct: {:.1f}% load_reverse: {:.1f}%".format(edge.name, edge.load_direct*100, edge.load_reverse*100))
     
 
 ################################################################@
