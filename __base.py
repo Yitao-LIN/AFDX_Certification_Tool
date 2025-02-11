@@ -57,7 +57,7 @@ class Edge:
         self.to = to
         self.load_direct  = 0
         self.load_reverse = 0
-        self.capacity = 100  # 100 Mbps TODO: Generalize to the xml file
+        self.capacity = 100*1E6 # 100 Mbps TODO: Generalize to the xml file
 
 """ Target
     The Target class is used to handle targets
@@ -183,6 +183,16 @@ def createFakeResultsFile (xmlFile):
             res.write('\t\t\t<target name="' + target.to + '" value="'+str(random.randint(400, 800))+'" />\n')
         res.write('\t\t</flow>\n')
     res.write('\t</delays>\n')
+
+    # Write load results
+    res.write('\t<loads>\n')
+    for edge in edges:
+        res.write('\t\t<edge name="' + edge.name + '">\n')
+        res.write('\t\t\t<usage type="direct" value="'+str(int(edge.load_direct))+'" percent="'+str(round(edge.load_direct/edge.capacity*100, 1))+'%"/>\n')
+        res.write('\t\t\t<usage type="reverse" value="'+str(int(edge.load_reverse))+'" percent="'+str(round(edge.load_reverse/edge.capacity*100, 1))+'%"/>\n')
+        res.write('\t\t</edge>\n')
+    res.write('\t</loads>\n')
+
     res.write('</results>\n')
     res.close()
     file2output(resFile)
@@ -206,19 +216,18 @@ flows = [] # the flows
 ################################################################@
 """ Load Calculus """
 ################################################################@
-def loadCalculus(edges, flows):
+def loadCalculus():
     for edge in edges:
         for flow in flows:
             for target in flow.targets:
                 for pair_index in range(len(target.path)-1):
                     if edge.frm == target.path[pair_index] and edge.to == target.path[pair_index+1]:
-                        edge.load_direct += (flow.payload + flow.overhead)/flow.period * 1E-6 * 8 /edge.capacity
+                        edge.load_direct += (flow.payload + flow.overhead)/flow.period * 8
                         # print(flow.name, "loaded on ", edge.name, "from ", edge.frm, "to", edge.to, "with", (flow.payload + flow.overhead)/flow.period * 1E-6, "Mbps")
                     elif edge.to == target.path[pair_index] and edge.frm == target.path[pair_index+1]:
-                        edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 1E-6 * 8 /edge.capacity
+                        edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 8
                         # print(flow.name, "loaded on ", edge.name, "from ", edge.to, "to", edge.frm, "with", (flow.payload + flow.overhead)/flow.period * 1E-6, "Mbps")    
-        print("\n Network load {} load_direct: {:.1f}% load_reverse: {:.1f}%".format(edge.name, edge.load_direct*100, edge.load_reverse*100))
-    
+        # print("\n Network load {} load_direct: {:.1f}% load_reverse: {:.1f}%".format(edge.name, edge.load_direct*100, edge.load_reverse*100))
 
 ################################################################@
 """ Main program """
@@ -231,9 +240,9 @@ if __name__ == '__main__':
         xmlFile="./Samples/ES2E_M.xml"
     
     parseNetwork(xmlFile)
+    loadCalculus()
     #traceNetwork()
-    #createFakeResultsFile(xmlFile)
-    loadCalculus(edges, flows)
+    createFakeResultsFile(xmlFile)
 
 
 
