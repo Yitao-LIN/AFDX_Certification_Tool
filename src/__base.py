@@ -27,6 +27,7 @@ import random
 class Node:
     def __init__(self, name):
         self.name = name
+        self.arrivalCurve = (0, 0)  # (rate, burst) - The A.C. of this node's output
 
 """ Station
     The Station class is used to handle stations
@@ -188,7 +189,7 @@ def createFakeResultsFile (xmlFile):
     res.write('\t<loads>\n')
     for edge in edges:
         res.write('\t\t<edge name="' + edge.name + '">\n')
-        res.write('\t\t\t<usage type="direct" value="'+str(int(edge.load_direct))+'" percent="'+str(round(edge.load_direct/edge.capacity*100, 1))+'%"/>\n')
+        res.write('\t\t\t<usage type="direct"  value="'+str(int(edge.load_direct))+'"  percent="'+str(round(edge.load_direct/edge.capacity*100, 1))+'%"/>\n')
         res.write('\t\t\t<usage type="reverse" value="'+str(int(edge.load_reverse))+'" percent="'+str(round(edge.load_reverse/edge.capacity*100, 1))+'%"/>\n')
         res.write('\t\t</edge>\n')
     res.write('\t</loads>\n')
@@ -214,20 +215,54 @@ edges = [] # the edges
 flows = [] # the flows
 
 ################################################################@
-""" Load Calculus """
+""" Local methods - Network analysis """
 ################################################################@
+
 def loadCalculus():
+    """ Load calculus
+        
+        The aim of the load calculus is to verify the network stability condition.
+        
+        **Assumption:**
+            - The links are full-duplex and the load may be different on each direction.
+    """
     for edge in edges:
         for flow in flows:
             for target in flow.targets:
                 for pair_index in range(len(target.path)-1):
                     if edge.frm == target.path[pair_index] and edge.to == target.path[pair_index+1]:
                         edge.load_direct += (flow.payload + flow.overhead)/flow.period * 8
-                        # print(flow.name, "loaded on ", edge.name, "from ", edge.frm, "to", edge.to, "with", (flow.payload + flow.overhead)/flow.period * 1E-6, "Mbps")
                     elif edge.to == target.path[pair_index] and edge.frm == target.path[pair_index+1]:
                         edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 8
-                        # print(flow.name, "loaded on ", edge.name, "from ", edge.to, "to", edge.frm, "with", (flow.payload + flow.overhead)/flow.period * 1E-6, "Mbps")    
-        # print("\n Network load {} load_direct: {:.1f}% load_reverse: {:.1f}%".format(edge.name, edge.load_direct*100, edge.load_reverse*100))
+
+def arrivalCurve(node: Node):
+    if not node.isSwitch(): # End-system arrival curve
+        arrivalCurve_ES(node)
+    if node.isSwitch():
+        arrivalCurve_SW(node)
+
+def arrivalCurve_ES(node: Node):
+    for flow in flows:
+        if flow.source == node.name:
+            node.arrivalCurve += ((flow.payload+flow.overhead)/flow.period*8, (flow.payload+flow.overhead)*8)
+
+def arrivalCurve_SW(node: Node):
+    for flow in flows:
+        for target in flow.targets:
+            if node.name in target.path:
+                pre_node = getNodeByName(node.name)
+                if pre_node.arrivalCurve is not (0,0):
+                    node.arrivalCurve += pre_node.arrivalCurve
+                else:
+                    arrivalCurve(pre_node)
+
+                
+def getNodeByName(name:str)->Node:
+    for node in nodes:
+        if node.name is name:
+            return node
+    return None
+        
 
 ################################################################@
 """ Main program """
@@ -240,9 +275,10 @@ if __name__ == '__main__':
         xmlFile="./Samples/ES2E_M.xml"
     
     parseNetwork(xmlFile)
-    loadCalculus()
-    #traceNetwork()
-    createFakeResultsFile(xmlFile)
+    # loadCalculus()
+    traceNetwork()
+    # createFakeResultsFile(xmlFile)
+    arrivalCurve_SW(nodes[0])
 
 
 
