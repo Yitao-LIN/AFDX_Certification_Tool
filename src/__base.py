@@ -326,14 +326,15 @@ class NetworkCalculus:
                     else:
                         pre_nodes[pre_node].append(t)
         for pre_node in pre_nodes.keys():
-            if target in pre_nodes[pre_node]:
+            # prevent multiple calculation of multicasted flow
+            if target in pre_nodes[pre_node]: 
+                # if the target comes from the previous node 
                 pre_rate, pre_burst = self.arrivalCurve(target, pre_node)
-                rate += pre_rate
-                burst += pre_burst
             else:
+                # if the target doesn't come from the previous node
                 pre_rate, pre_burst = self.arrivalCurve(pre_nodes[pre_node][0], pre_node)
-                rate += pre_rate
-                burst += pre_burst
+            rate += pre_rate
+            burst += pre_burst
         return rate, burst
     
     def arrivalCurve(self, target, node):
@@ -392,7 +393,7 @@ if __name__ == '__main__':
     if len(sys.argv)>=2:
         xmlFile=sys.argv[1]
     else:
-        xmlFile="./Samples/3ESE.xml"
+        xmlFile="./Samples/AFDX.xml"
     
     parseNetwork(xmlFile)
     traceNetwork()
@@ -400,7 +401,3 @@ if __name__ == '__main__':
     nc.loadCalculus()
     nc.getNetworkDelay()
     createResultsFile(xmlFile)
-
-    
-
-
