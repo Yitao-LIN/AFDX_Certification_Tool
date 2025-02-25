@@ -18,6 +18,13 @@ from copy import deepcopy
 from math import ceil
 
 ################################################################@
+""" Global data """
+################################################################@
+nodes = [] # the nodes
+edges = [] # the edges
+flows = [] # the flows
+
+################################################################@
 """ Local classes """
 ################################################################@
 
@@ -70,7 +77,6 @@ class Edge:
         self.load_direct  = 0
         self.load_reverse = 0
         
-
 """ Target
     The Target class is used to handle targets
 """
@@ -97,35 +103,44 @@ class Flow:
 ################################################################@
 """ Local methods """
 ################################################################@
-""" parseStations
-    Method to parse stations
-        root : the xml main root
-"""
+
 def parseStations(root):
+    """ parseStations
+
+        Method to parse stations
+        Args:
+            root : the xml main root
+    """
     for station in root.findall('station'):
         nodes.append (Station(station.get('name'), station.get('transmission-capacity')))
 
-""" parseSwitches
-    Method to parse switches
-        root : the xml main root
-"""
 def parseSwitches(root):
+    """ parseSwitches
+
+        Method to parse switches
+        Args:
+            root : the xml main root
+    """
     for sw in root.findall('switch'):
         nodes.append (Switch(sw.get('name'),float(sw.get('tech-latency'))*1e-6, sw.get('transmission-capacity')))
 
-""" parseEdges
-    Method to parse edges
-        root : the xml main root
-"""
 def parseEdges(root):
+    """ parseEdges
+
+        Method to parse edges
+        Args:
+            root : the xml main root
+    """
     for link in root.findall('link'):
         edges.append (Edge(link.get('name'),link.get('from'),link.get('to'), link.get('fromPort'), link.get('toPort'), link.get('transmission-capacity')))
 
-""" parseFlows
-    Method to parse flows
-        root : the xml main root
-"""
 def parseFlows(root):
+    """ parseFlows
+
+        Method to parse flows
+        Args:
+            root : the xml main root
+    """
     for sw in root.findall('flow'):
         flow = Flow (sw.get('name'),sw.get('source'),float(sw.get('max-payload')),67,float(sw.get('period'))*1e-3)
         flows.append (flow)
@@ -139,6 +154,15 @@ def parseFlows(root):
                     target.path_link.append(getEdge(target.path[-2], target.path[-1]))
 
 def getEdge(frm, to):
+    ''' getEdge
+    
+        get the edge name between two nodes
+        Args:
+            frm : the source node
+            to  : the destination node
+        Returns:
+            The edge name is returned with the direction
+    '''
     for edge in edges:
         if edge.frm == frm and edge.to == to:
             return edge.name + " Direct"
@@ -146,10 +170,15 @@ def getEdge(frm, to):
             return edge.name + " Reverse"
     return None
 
-""" parseCapacities
-    Method to automatically detect the unit of the capacity and convert it to bits/s
-"""
 def parseCapacities(capacityStr: str) -> int:
+    """ parseCapacities
+
+        Method to automatically detect the unit of the capacity and convert it to bits/s
+        Args:
+            capacityStr : the capacity string
+        Returns:
+            The capacity in bits/s
+    """
     if 'Gbps' in capacityStr:
         return int(capacityStr.replace('Gbps', '')) * 1e9
     elif 'Mbps' in capacityStr:
@@ -159,11 +188,13 @@ def parseCapacities(capacityStr: str) -> int:
     else:
         return int(capacityStr)
 
-""" parseNetwork
-    Method to parse the whole network
-        xmlFile : the path to the xml file
-"""
 def parseNetwork(xmlFile):
+    """ parseNetwork
+
+        Method to parse the whole network
+        Args:
+            xmlFile : the path to the xml file
+    """
     if os.path.isfile(xmlFile):
         tree = ET.parse(xmlFile)
         root = tree.getroot()
@@ -174,10 +205,11 @@ def parseNetwork(xmlFile):
     else:
         print("File not found: "+xmlFile)
 
-""" traceNetwork
-    Method to trace the network to the console
-"""
 def traceNetwork():
+    """ traceNetwork
+
+        Method to trace the network to the console
+    """
     print("Stations:")
     for node in nodes:
         if not node.isSwitch():
@@ -201,11 +233,13 @@ def traceNetwork():
                 print ("\t\t\t" + node)
                 print ("\t\t\t| " + target.path_link[target.path.index(node)]) if target.path.index(node) < len(target.path)-1 else print("\n")
 
-""" createResultsFile
-    Method to create a result file
-        xmlFile : the path to the xml (input) file
-"""
 def createResultsFile (xmlFile):
+    """ createResultsFile
+
+        Method to create a result file
+        Args:
+            xmlFile : the path to the xml (output) file
+    """
     posDot = xmlFile.rfind('.')
     if not (posDot == -1):
         resFile = xmlFile[0:posDot]+'_res_me.xml'
@@ -235,21 +269,16 @@ def createResultsFile (xmlFile):
     res.close()
     file2output(resFile)
     
-""" file2output
-    Method to print a file to standard ouput
-        file : the path to the xml (input) file
-"""
 def file2output (file):
+    """ file2output
+    
+        Method to print a file to standard ouput
+        Args:
+            file : the path to the xml (input) file
+    """
     hFile = open(file, "r")
     for line in hFile:
         print(line.rstrip())
-
-################################################################@
-""" Global data """
-################################################################@
-nodes = [] # the nodes
-edges = [] # the edges
-flows = [] # the flows
 
 ################################################################@
 """ Network analysis methods"""
