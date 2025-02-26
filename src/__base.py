@@ -28,20 +28,22 @@ flows = [] # the flows
 """ Local classes """
 ################################################################@
 
-""" Node
-    The Node class is used to handle any node if the network
-    It's an abstract class
-"""
 class Node:
+    """ Node
+
+        The Node class is used to handle any node if the network
+        It's an abstract class
+    """
     def __init__(self, name):
         self.name = name
         self.arrivalCurve = None   # tuple (Rate, Burst)
         self.serviceCurve = None   # tuple (Capacity, Latency)
 
-""" Station
-    The Station class is used to handle stations
-"""
 class Station(Node):
+    """ Station
+
+        The Station class is used to handle stations
+    """
     def __init__(self, name, capacity):
         self.name = name
         self.capacity = parseCapacities(capacityStr=capacity)
@@ -50,10 +52,11 @@ class Station(Node):
     def isSwitch(self):
         return False
 
-""" Switch
-    The Switch class is used to handle switches
-"""
 class Switch(Node):
+    """ Switch
+
+        The Switch class is used to handle switches
+    """ 
     def __init__(self, name, latency, capacity):
         self.name = name
         self.latency = latency
@@ -63,10 +66,11 @@ class Switch(Node):
     def isSwitch(self):
         return True
 
-""" Edge
-    The Edge class is used to handle edges
-"""
 class Edge:
+    """ Edge
+
+        The Edge class is used to handle edges
+    """
     def __init__(self, name, frm, to, frmPort, toPort, capacity):
         self.name = name
         self.capacity = parseCapacities(capacityStr=capacity)
@@ -77,10 +81,11 @@ class Edge:
         self.load_direct  = 0
         self.load_reverse = 0
         
-""" Target
-    The Target class is used to handle targets
-"""
 class Target:
+    """ Target
+
+        The Target class is used to handle targets
+    """
     def __init__(self, flow, to):
         self.flow = flow
         self.to = to
@@ -88,10 +93,11 @@ class Target:
         self.path_link = []
         self.delay = 0
 
-""" Flow
-    The Flow class is used to handle flows
-"""
 class Flow:
+    """ Flow
+
+        The Flow class is used to handle flows
+    """
     def __init__(self, name, source, payload, overhead, period):
         self.name = name
         self.source = source
@@ -289,6 +295,8 @@ class NetworkCalculus:
         self.nodes = deepcopy(nodes)
         self.flows = deepcopy(flows)
         self.edges = deepcopy(edges)
+        self.node_map = {node.name: node for node in self.nodes}  # Quick node lookup
+
     
     def loadCalculus(self):
         """ Load calculus
@@ -300,27 +308,54 @@ class NetworkCalculus:
             **Assumption:**
                 - The links are full-duplex and the load may be different on each direction.
         """
-        is_overflow = False
-        for edge in edges:
-            for flow in flows:
-                flow_is_computed = False
-                for target in flow.targets:
-                    if flow_is_computed:
-                        break
-                    for pair_index in range(len(target.path)-1):
+        is_overflow = False # overflow flag
+        for edge in edges:  # for each edge
+            for flow in flows:  # check all the flows in the network
+                flow_is_computed = False    # initialize the multicasted flag
+                for target in flow.targets: # for all the targets in the flow
+                    if flow_is_computed:    # if one of the targets in this flow is already computed
+                        break               # skip this flow
+                    for pair_index in range(len(target.path)-1):    # check the path of the target
+                        # if th path includes this edge (direct)
                         if edge.frm == target.path[pair_index] and edge.to == target.path[pair_index+1]:
                             edge.load_direct += (flow.payload + flow.overhead)/flow.period * 8
                             flow_is_computed = True
+                        # if th path includes this edge (reverse)
                         elif edge.to == target.path[pair_index] and edge.frm == target.path[pair_index+1]:
                             edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 8
                             flow_is_computed = True
+                        # if the edge is overloaded
                         if edge.load_direct > edge.capacity or edge.load_reverse > edge.capacity:
                             is_overflow = True
+                        # if the flow is already found in this edge, skip the other targets
                         if flow_is_computed:
                             break
         return is_overflow
 
-    def serviceCurve(self):
+    def getNetworkDelay(self):
+        """ Network delay calculus
+
+            Main method to compute all network delays.
+        """
+        # calculate service curves for all nodes once
+        self._computeAllServiceCurve()
+
+        # calculate delays for all flow targets
+        for flow in self.flows:
+            for target in flow.targets:
+                # reset target delay
+                target.delay = 0
+
+                # resursively calculate delays starting from second-to-last node
+                if len(target.path) >= 2:
+                    last_node = self.node_map[target.path[-2]]
+                    self._computeNodeDelay(target, last_node)
+                
+                # update the original flow data
+                flows[self.flows.index(flow)].targets[flow.targets.index(target)] = deepcopy(target)
+                print(f"Delay {target.flow.source} to target {target.to} = {target.delay*1E6:.2f} us")
+    
+    def _computeAllServiceCurve(self):
         """ Service curve calculus
         
         - The aim of the service curve (*S.C.*) calculus is to give the service curve
@@ -336,95 +371,91 @@ class NetworkCalculus:
     """
         for node in self.nodes:
             # check if the node is a switch
-            capacity, latency = 0, 0 # initialize the service curve
-            if node.isSwitch():
-                latency = node.latency
-                capacity = node.capacity
-            else:
-                latency = 0
-                capacity = node.capacity
-            node.serviceCurve = (capacity, latency)     # set the service curve
+            latency = node.latency if node.isSwitch() else 0
+            node.serviceCurve = (node.capacity, latency)
 
-    def arrivalCurveES(self, node):
-        rate, burst = 0, 0
-        for flow in self.flows:
-            if flow.source == node.name:
-                packet_size = (flow.payload + flow.overhead)*8
-                rate += packet_size/flow.period
-                burst += packet_size
-        return rate, burst
-    
-    def arrivalCurveSW(self, target, node):
-        rate, burst = 0, 0
-        target_link = target.path_link[target.path.index(node.name)]    # the output link of this target
-        pre_nodes = {}  # the previous nodes of this node
-        for flow in self.flows:
-            for t in flow.targets:
-                if (node.name in t.path and
-                    t.path_link[t.path.index(node.name)] == target_link):
-                    pre_node = self.getNodeByName(t.path[t.path.index(node.name)-1])
-                    if pre_node not in pre_nodes.keys():
-                        pre_nodes.update({pre_node: [t]})
-                    else:
-                        pre_nodes[pre_node].append(t)
-        for pre_node in pre_nodes.keys():
-            # prevent multiple calculation of multicasted flow
-            if target in pre_nodes[pre_node]: 
-                # if the target comes from the previous node 
-                pre_rate, pre_burst = self.arrivalCurve(target, pre_node)
-            else:
-                # if the target doesn't come from the previous node
-                pre_rate, pre_burst = self.arrivalCurve(pre_nodes[pre_node][0], pre_node)
-            rate += pre_rate
-            burst += pre_burst
-        return rate, burst
-    
-    def arrivalCurve(self, target, node):
+    def _computeNodeDelay(self, target, node):
+        """ Node delay calculus
+
+            Recursive method to compute delay through a node
+        """
         if node.name == target.to:
-            return None
+            return None, None
         
         if node.isSwitch():
-            rate, burst = self.arrivalCurveSW(target, node)
+            rate, burst = self._computeSwitchArrivalCurve(target, node)
         else:
-            rate, burst = self.arrivalCurveES(node)
-
-        # apply service curve
+            rate, burst = self._computeEndSystemArrivalCurve(node)
+        
+        # store arrival curve and compute delay
         node.arrivalCurve = (rate, burst)
-        delay = self.delayBound(node)
+        delay = self._computeDelayBound(node)
 
         if delay is not None:
+            # add delay to target and update burst
             target.delay += delay
             burst += rate * delay
             node.arrivalCurve = (rate, burst)
             return rate, burst
         else:
             print("Service curve not defined for node: " + node.name)
+            return None, None
+    
+    def _computeEndSystemArrivalCurve(self, node):
+        """ End-System arrival curve calculus
+
+            Method to compute the arrival curve of an End-System
+        """
+        rate, burst = 0, 0
+        for flow in self.flows:
+            if flow.source == node.name:
+                packet_size = (flow.payload + flow.overhead) * 8
+                rate += packet_size / flow.period
+                burst += packet_size
+        return rate, burst
+    
+    def _computeSwitchArrivalCurve(self, target, node):
+        """ Switch arrival curve calculus
+
+            Method to compute the arrival curve of a Switch
+        """
+        rate, burst = 0, 0
+        # get current link for this node in the target's path
+        node_index = target.path.index(node.name)
+        current_link = target.path_link[node_index]
+
+        # find all contributing flows from previous nodes
+        pre_nodes = {}
+        for flow in self.flows:
+            for t in flow.targets:
+                if (node.name in t.path and
+                    t.path_link[t.path.index(node.name)] == current_link):
+
+                    pre_node = self.node_map[t.path[t.path.index(node.name)-1]]
+                    if pre_node not in pre_nodes.keys():
+                        pre_nodes[pre_node] = [t]
+                    else:
+                        pre_nodes[pre_node].append(t)
+
+        # process each previous node exactly once to prevent multiple calculation of multicasted flows
+        for pre_node, targets in pre_nodes.items():
+            # use the current target if it comes from this previous node
+            pro_target = target if target in targets else targets[0]
+            pre_rate, pre_burst = self._computeNodeDelay(pro_target, pre_node)
+
+            if pre_rate is not None and pre_burst is not None:
+                rate += pre_rate
+                burst += pre_burst
+        return rate, burst
+    
+    def _computeDelayBound(self, node: Node):
+        if node.serviceCurve is None:
             return None
 
-    def delayBound(self, node: Node):
-        if node.serviceCurve is not None:
-            return node.arrivalCurve[1]/node.serviceCurve[0] + node.serviceCurve[1]
-        return None
-
-    def getNodeByName(self, name:str)->Node:
-        for node in self.nodes:
-            if node.name == name:
-                return node
-        return None
-
-    def resetCalculation(self):
-        for flow in self.flows:
-            for target in flow.targets:
-                target.delay = 0
-
-    def getNetworkDelay(self):
-        self.serviceCurve()
-        for flow in self.flows:
-            for target in flow.targets:
-                self.resetCalculation()
-                self.arrivalCurve(target, self.getNodeByName(target.path[-2]))
-                print("Delay " + target.flow.source +" to target " + target.to + " = " + str(target.delay*1E6) + " us")
-                flows[self.flows.index(flow)].targets[flow.targets.index(target)] = deepcopy(target)
+        arrival_rate, arrival_burst = node.arrivalCurve
+        service_rate, service_latency = node.serviceCurve
+        
+        return arrival_burst / service_rate + service_latency
         
 
 ################################################################@
