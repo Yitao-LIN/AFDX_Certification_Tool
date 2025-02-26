@@ -294,18 +294,31 @@ class NetworkCalculus:
         """ Load calculus
             
             The aim of the load calculus is to verify the network stability condition.
+            Return:
+                is_overflow : boolean, True if the network is overloaded, False otherwise.
             
             **Assumption:**
                 - The links are full-duplex and the load may be different on each direction.
         """
+        is_overflow = False
         for edge in edges:
             for flow in flows:
+                flow_is_computed = False
                 for target in flow.targets:
+                    if flow_is_computed:
+                        break
                     for pair_index in range(len(target.path)-1):
                         if edge.frm == target.path[pair_index] and edge.to == target.path[pair_index+1]:
                             edge.load_direct += (flow.payload + flow.overhead)/flow.period * 8
+                            flow_is_computed = True
                         elif edge.to == target.path[pair_index] and edge.frm == target.path[pair_index+1]:
                             edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 8
+                            flow_is_computed = True
+                        if edge.load_direct > edge.capacity or edge.load_reverse > edge.capacity:
+                            is_overflow = True
+                        if flow_is_computed:
+                            break
+        return is_overflow
 
     def serviceCurve(self):
         """ Service curve calculus
@@ -427,6 +440,9 @@ if __name__ == '__main__':
     parseNetwork(xmlFile)
     traceNetwork()
     nc = NetworkCalculus(nodes, flows, edges)
-    nc.loadCalculus()
-    nc.getNetworkDelay()
+    is_overflow = nc.loadCalculus()
+    if not is_overflow:
+        nc.getNetworkDelay()
+    else:
+        print("The network is overloaded.")
     createResultsFile(xmlFile)
