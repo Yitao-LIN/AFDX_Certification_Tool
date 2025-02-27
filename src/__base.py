@@ -298,7 +298,7 @@ class NetworkCalculus:
         self.node_map = {node.name: node for node in self.nodes}  # Quick node lookup
 
     
-    def loadCalculus(self):
+    def computeNetworkLoads(self):
         """ Load calculus
             
             The aim of the load calculus is to verify the network stability condition.
@@ -332,7 +332,7 @@ class NetworkCalculus:
                             break
         return is_overflow
 
-    def getNetworkDelay(self):
+    def computeNetworkDelays(self):
         """ Network delay calculus
 
             Main method to compute all network delays.
@@ -471,9 +471,9 @@ if __name__ == '__main__':
     parseNetwork(xmlFile)
     traceNetwork()
     nc = NetworkCalculus(nodes, flows, edges)
-    is_overflow = nc.loadCalculus()
+    is_overflow = nc.computeNetworkLoads()
     if not is_overflow:
-        nc.getNetworkDelay()
+        nc.computeNetworkDelays()
     else:
         print("The network is overloaded.")
     createResultsFile(xmlFile)
