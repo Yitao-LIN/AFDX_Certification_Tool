@@ -345,12 +345,17 @@ class NetworkCalculus:
             for target in flow.targets:
                 # reset target delay
                 target.delay = 0
-
-                # resursively calculate delays starting from second-to-last node
-                if len(target.path) >= 2:
-                    last_node = self.node_map[target.path[-2]]
-                    self._computeNodeDelay(target, last_node)
-                
+                # compute delays from Src to Dst
+                for node in target.path:
+                    if node == target.to:
+                        break   # stop when reaching the target
+                    else:
+                        source_node = self.node_map[node]
+                        rate, burst = self._computeNodeDelay(target, source_node)
+                        if rate is not None and burst is not None:
+                            source_node.arrivalCurve = (rate, burst)
+                        else:
+                            break
                 # update the original flow data
                 flows[self.flows.index(flow)].targets[flow.targets.index(target)] = deepcopy(target)
                 print(f"Delay {target.flow.source} to target {target.to} = {target.delay*1E6:.2f} us")
@@ -382,15 +387,17 @@ class NetworkCalculus:
         if node.name == target.to:
             return None, None
         
+        # Theorem 1: Input arrival curve of a node
         if node.isSwitch():
             rate, burst = self._computeSwitchArrivalCurve(target, node)
         else:
             rate, burst = self._computeEndSystemArrivalCurve(node)
         
-        # store arrival curve and compute delay
+        # Delay
         node.arrivalCurve = (rate, burst)
         delay = self._computeDelayBound(node)
 
+        # Theorem 2: Ouput arrival curve of a node
         if delay is not None:
             # add delay to target and update burst
             target.delay += delay
@@ -422,30 +429,36 @@ class NetworkCalculus:
         rate, burst = 0, 0
         # get current link for this node in the target's path
         node_index = target.path.index(node.name)
-        current_link = target.path_link[node_index]
-
-        # find all contributing flows from previous nodes
-        pre_nodes = {}
-        for flow in self.flows:
-            for t in flow.targets:
+        current_link = target.path_link[node_index] # identify output port
+        # get previous link for this node
+        input_port_dict = {}
+        for f in self.flows:
+            for t in f.targets:
                 if (node.name in t.path and
                     t.path_link[t.path.index(node.name)] == current_link):
-
-                    pre_node = self.node_map[t.path[t.path.index(node.name)-1]]
-                    if pre_node not in pre_nodes.keys():
-                        pre_nodes[pre_node] = [t]
+                    pre_link = t.path_link[t.path.index(node.name) - 1]
+                    if pre_link not in input_port_dict:
+                        input_port_dict[pre_link] = [t]
                     else:
-                        pre_nodes[pre_node].append(t)
+                        input_port_dict[pre_link].append(t)
+        
+        # iterate over all the input ports
+        for input_port, t_list in input_port_dict.items():
+            # get all the flows that pass through this switch and shares the same output link (i.e. same output port)
+            for t in t_list:
+                pre_node = self.node_map[t.path[t.path.index(node.name) - 1]]
+                pre_rate, pre_burst = pre_node.arrivalCurve if pre_node.arrivalCurve is not None else (None, None)
+                if pre_rate is not None:
+                    rate += pre_rate
+                    burst += pre_burst
+                else:
+                    pre_rate, pre_burst = self._computeNodeDelay(t, pre_node)
+                    rate += pre_rate
+                    burst += pre_burst
+                break
 
-        # process each previous node exactly once to prevent multiple calculation of multicasted flows
-        for pre_node, targets in pre_nodes.items():
-            # use the current target if it comes from this previous node
-            pro_target = target if target in targets else targets[0]
-            pre_rate, pre_burst = self._computeNodeDelay(pro_target, pre_node)
 
-            if pre_rate is not None and pre_burst is not None:
-                rate += pre_rate
-                burst += pre_burst
+        
         return rate, burst
     
     def _computeDelayBound(self, node: Node):
@@ -462,18 +475,17 @@ class NetworkCalculus:
 """ Main program """
 ################################################################@
 
-if __name__ == '__main__':
-    if len(sys.argv)>=2:
-        xmlFile=sys.argv[1]
-    else:
-        xmlFile="./Samples/AFDX.xml"
-    
-    parseNetwork(xmlFile)
-    traceNetwork()
-    nc = NetworkCalculus(nodes, flows, edges)
-    is_overflow = nc.computeNetworkLoads()
-    if not is_overflow:
-        nc.computeNetworkDelays()
-    else:
-        print("The network is overloaded.")
-    createResultsFile(xmlFile)
+if len(sys.argv)>=2:
+    xmlFile=sys.argv[1]
+else:
+    xmlFile="./Samples/AFDX.xml"
+
+parseNetwork(xmlFile)
+traceNetwork()
+nc = NetworkCalculus(nodes, flows, edges)
+is_overflow = nc.computeNetworkLoads()
+if not is_overflow:
+    nc.computeNetworkDelays()
+else:
+    print("The network is overloaded.")
+createResultsFile(xmlFile)
