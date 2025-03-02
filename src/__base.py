@@ -36,6 +36,7 @@ class Node:
     """
     def __init__(self, name):
         self.name = name
+        self.ports = {}            # dict  the ports of the node
         self.arrivalCurve = None   # tuple (Rate, Burst)
         self.serviceCurve = None   # tuple (Capacity, Latency)
 
@@ -47,6 +48,7 @@ class Station(Node):
     def __init__(self, name, capacity):
         self.name = name
         self.capacity = parseCapacities(capacityStr=capacity)
+        self.ports = {}            # dict  the ports of the node
         self.arrivalCurve = None   # tuple (Rate, Burst)
         self.serviceCurve = None   # tuple (Capacity, Latency)
     def isSwitch(self):
@@ -61,10 +63,22 @@ class Switch(Node):
         self.name = name
         self.latency = latency
         self.capacity = parseCapacities(capacityStr=capacity)
+        self.ports = {}            # dict  the ports of the node
         self.arrivalCurve = None   # tuple (Rate, Burst)
         self.serviceCurve = None   # tuple (Capacity, Latency)
     def isSwitch(self):
         return True
+
+class Port:
+    """ Port
+    
+        The Port class is used to handle ports
+    """
+    def __init__(self, name):
+        self.name = name
+        self.edge = None
+        self.isReverse = False
+        self.load = 0
 
 class Edge:
     """ Edge
@@ -105,6 +119,7 @@ class Flow:
         self.overhead = overhead
         self.period = period
         self.targets = []
+        self.arrival_curve_on_path = {}
 
 ################################################################@
 """ Local methods """
@@ -157,7 +172,25 @@ def parseFlows(root):
             for pt in tg.findall('path'):
                 target.path.append(pt.get('node'))
                 if len(target.path) > 1:
-                    target.path_link.append(getEdge(target.path[-2], target.path[-1]))
+                    edge_name = getEdge(target.path[-2], target.path[-1])
+                    target.path_link.append(edge_name)
+                    flow.arrival_curve_on_path[edge_name] = (None, None)
+
+def parsePort():
+    """ getPort
+    
+        get all the ports of every node
+    """
+    for node in nodes:
+        for edge in edges:
+            if edge.frm == node.name:
+                node.ports[edge.frmPort] = Port(edge.frmPort)
+                node.ports[edge.frmPort].edge = edge
+                node.ports[edge.frmPort].isReverse = False
+            elif edge.to == node.name:
+                node.ports[edge.toPort] = Port(edge.toPort)
+                node.ports[edge.toPort].edge = edge
+                node.ports[edge.toPort].isReverse = True
 
 def getEdge(frm, to):
     ''' getEdge
@@ -208,6 +241,7 @@ def parseNetwork(xmlFile):
         parseSwitches(root)
         parseEdges(root)
         parseFlows(root)
+        parsePort()
     else:
         print("File not found: "+xmlFile)
 
@@ -291,13 +325,31 @@ def file2output (file):
 ################################################################@
 
 class NetworkCalculus:
+    """ NetworkCalculus
+    
+        This class is created to compute:
+            - Network loads
+            - Network delays
+    """
     def __init__(self, nodes, flows, edges):
+        # deep copy global data to avoid any modification
         self.nodes = deepcopy(nodes)
         self.flows = deepcopy(flows)
         self.edges = deepcopy(edges)
-        self.node_map = {node.name: node for node in self.nodes}  # Quick node lookup
 
-    
+        # create quick lookup maps
+        self.node_map = {node.name: node for node in self.nodes}
+        self.edge_map = {edge.name: edge for edge in self.edges}
+        self.flow_map = {flow.name: flow for flow in self.flows}
+        self.port_map = {edge.name: (edge.frmPort, edge.toPort) for edge in self.edges}
+
+        # Store paths for quicker lookup
+        self.flow_paths = {}
+        for flow in self.flows:
+            self.flow_paths[flow.name] = {}
+            for target in flow.targets:
+                self.flow_paths[flow.name][target.to] = target.path
+
     def computeNetworkLoads(self):
         """ Load calculus
             
@@ -308,34 +360,55 @@ class NetworkCalculus:
             **Assumption:**
                 - The links are full-duplex and the load may be different on each direction.
         """
-        is_overflow = False # overflow flag
-        for edge in edges:  # for each edge
-            for flow in flows:  # check all the flows in the network
-                flow_is_computed = False    # initialize the multicasted flag
-                for target in flow.targets: # for all the targets in the flow
-                    if flow_is_computed:    # if one of the targets in this flow is already computed
-                        break               # skip this flow
-                    for pair_index in range(len(target.path)-1):    # check the path of the target
-                        # if th path includes this edge (direct)
-                        if edge.frm == target.path[pair_index] and edge.to == target.path[pair_index+1]:
-                            edge.load_direct += (flow.payload + flow.overhead)/flow.period * 8
-                            flow_is_computed = True
-                        # if th path includes this edge (reverse)
-                        elif edge.to == target.path[pair_index] and edge.frm == target.path[pair_index+1]:
-                            edge.load_reverse += (flow.payload + flow.overhead)/flow.period * 8
-                            flow_is_computed = True
-                        # if the edge is overloaded
-                        if edge.load_direct > edge.capacity or edge.load_reverse > edge.capacity:
-                            is_overflow = True
-                        # if the flow is already found in this edge, skip the other targets
-                        if flow_is_computed:
+        # initialize is_overflow flag
+        is_overflow = False
+
+        # pre-compute flow-to-path mapping for efficiency
+        flow_on_edges = {edge.name: {"direct": [], "reverse": []} for edge in self.edges}
+
+        # build flow-to-edge mapping in one pass
+        for flow in self.flows:
+            for target in flow.targets:
+                for i in range(len(target.path)-1):
+                    src, dist = target.path[i], target.path[i+1]
+                    # find matching edge
+                    for edge in self.edges:
+                        if edge.frm == src and edge.to == dist:
+                            flow_on_edges[edge.name]["direct"].append(flow)
                             break
+                        elif edge.frm == dist and edge.to == src:
+                            flow_on_edges[edge.name]["reverse"].append(flow)
+                            break
+        
+        # compute loads in one pass
+        for edge in self.edges:
+            # direct flows
+            edge.load_direct = sum(
+                (flow.payload + flow.overhead) * 8 / flow.period 
+                for flow in set(flow_on_edges[edge.name]["direct"])
+            )
+            # reverse flows
+            edge.load_reverse = sum(
+                (flow.payload + flow.overhead) * 8 / flow.period 
+                for flow in set(flow_on_edges[edge.name]["reverse"])
+            )
+
+            # deep copy the edge to the original list
+            edges[self.edges.index(edge)] = deepcopy(edge)
+
+            # check if the network is overloaded
+            if edge.load_direct > edge.capacity or edge.load_reverse > edge.capacity:
+                is_overflow = True
+        
         return is_overflow
 
     def computeNetworkDelays(self):
         """ Network delay calculus
 
             Main method to compute all network delays.
+            ## Computation process:
+            - Compute service curves for all nodes since the service curve is based on the node model only.
+
         """
         # calculate service curves for all nodes once
         self._computeAllServiceCurve()
@@ -343,19 +416,15 @@ class NetworkCalculus:
         # calculate delays for all flow targets
         for flow in self.flows:
             for target in flow.targets:
-                # reset target delay
-                target.delay = 0
-                # compute delays from Src to Dst
-                for node in target.path:
+                target.delay = 0            # reset target delay
+                for node in target.path:    # compute delays from Src to Dst
                     if node == target.to:
-                        break   # stop when reaching the target
+                        break               # stop when reaching the target
                     else:
                         source_node = self.node_map[node]
-                        rate, burst = self._computeNodeDelay(target, source_node)
-                        if rate is not None and burst is not None:
-                            source_node.arrivalCurve = (rate, burst)
-                        else:
-                            break
+                        input_port = self._getPortNumber(target.path_link[target.path.index(node)-1])[1]
+                        output_port = self._getPortNumber(target.path_link[target.path.index(node)])[0]
+                        rate, burst = self._computeNodeDelay(target, source_node, input_port, output_port)
                 # update the original flow data
                 flows[self.flows.index(flow)].targets[flow.targets.index(target)] = deepcopy(target)
                 print(f"Delay {target.flow.source} to target {target.to} = {target.delay*1E6:.2f} us")
@@ -379,7 +448,7 @@ class NetworkCalculus:
             latency = node.latency if node.isSwitch() else 0
             node.serviceCurve = (node.capacity, latency)
 
-    def _computeNodeDelay(self, target, node):
+    def _computeNodeDelay(self, target, node, input_port, output_port):
         """ Node delay calculus
 
             Recursive method to compute delay through a node
@@ -387,89 +456,115 @@ class NetworkCalculus:
         if node.name == target.to:
             return None, None
         
+        # output link of the node
+        output_link = target.path_link[target.path.index(node.name)]
+        
         # Theorem 1: Input arrival curve of a node
         if node.isSwitch():
-            rate, burst = self._computeSwitchArrivalCurve(target, node)
+            rate, burst = self._computeSwitchArrivalCurve(target, node, input_port, output_port)
         else:
-            rate, burst = self._computeEndSystemArrivalCurve(node)
+            rate, burst = self._computeEndSystemArrivalCurve(node, target)
         
         # Delay
-        node.arrivalCurve = (rate, burst)
-        delay = self._computeDelayBound(node)
+        delay = self._computeDelayBound(node, burst)
 
         # Theorem 2: Ouput arrival curve of a node
         if delay is not None:
             # add delay to target and update burst
+            pre_link = target.path_link[target.path.index(node.name)-1] if target.path.index(node.name) > 0 else None
+            if pre_link is not None:
+                rate = target.flow.arrival_curve_on_path[pre_link][0]
+                burst = target.flow.arrival_curve_on_path[pre_link][1]
+            else:
+                rate = (target.flow.payload + target.flow.overhead) * 8 / target.flow.period
+                burst = (target.flow.payload + target.flow.overhead) * 8
             target.delay += delay
             burst += rate * delay
-            node.arrivalCurve = (rate, burst)
+            target.flow.arrival_curve_on_path[output_link] = (rate, burst)
+            # print(f"{target.flow.name} {output_link} {rate} {burst}")
             return rate, burst
         else:
             print("Service curve not defined for node: " + node.name)
             return None, None
     
-    def _computeEndSystemArrivalCurve(self, node):
+    def _computeEndSystemArrivalCurve(self, node, target):
         """ End-System arrival curve calculus
 
             Method to compute the arrival curve of an End-System
         """
         rate, burst = 0, 0
-        for flow in self.flows:
-            if flow.source == node.name:
-                packet_size = (flow.payload + flow.overhead) * 8
-                rate += packet_size / flow.period
-                burst += packet_size
+        for f in flows:
+            if f.source == node.name:
+                rate += (f.payload + f.overhead) * 8 / f.period
+                burst += (f.payload + f.overhead) * 8
         return rate, burst
     
-    def _computeSwitchArrivalCurve(self, target, node):
+    def _computeSwitchArrivalCurve(self, target, node, input_port, output_port):
         """ Switch arrival curve calculus
 
             Method to compute the arrival curve of a Switch
         """
         rate, burst = 0, 0
-        # get current link for this node in the target's path
-        node_index = target.path.index(node.name)
-        current_link = target.path_link[node_index] # identify output port
-        # get previous link for this node
+
+        # dict to track flow edges by input port
         input_port_dict = {}
+
+        # identify all flows that use this output port
         for f in self.flows:
             for t in f.targets:
-                if (node.name in t.path and
-                    t.path_link[t.path.index(node.name)] == current_link):
-                    pre_link = t.path_link[t.path.index(node.name) - 1]
-                    if pre_link not in input_port_dict:
-                        input_port_dict[pre_link] = [t]
-                    else:
-                        input_port_dict[pre_link].append(t)
-        
-        # iterate over all the input ports
-        for input_port, t_list in input_port_dict.items():
-            # get all the flows that pass through this switch and shares the same output link (i.e. same output port)
-            for t in t_list:
-                pre_node = self.node_map[t.path[t.path.index(node.name) - 1]]
-                pre_rate, pre_burst = pre_node.arrivalCurve if pre_node.arrivalCurve is not None else (None, None)
-                if pre_rate is not None:
-                    rate += pre_rate
-                    burst += pre_burst
+                # check if the target used the same output port
+                node_index = t.path.index(node.name) if node.name in t.path else -1
+                if node_index >= 0 and node_index < len(t.path) - 1:
+                    output_link_name = t.path_link[node_index]
+                    t_output_port = self._getPortNumber(output_link_name)[0]
+
+                    if t_output_port == output_port:
+                        # this target uses the same output port
+                        if node_index > 0: # ensure there is a previous link
+                            pre_link = t.path_link[node_index - 1]
+                            t_input_port = self._getPortNumber(pre_link)[1]
+                            if t_input_port not in input_port_dict:
+                                input_port_dict[t_input_port] = []
+                            input_port_dict[t_input_port].append((f, t, node_index-1))
+                        break # skip the other targets since the flow is already included
+
+        # calculate arrival curves for each input port
+        port_rate, port_burst = 0, 0
+        for input_port, flow_target_nodes in input_port_dict.items():
+            for f, t, node_index in flow_target_nodes:
+                if f.arrival_curve_on_path[t.path_link[node_index]] != (None, None):
+                    pre_rate, pre_burst = f.arrival_curve_on_path[t.path_link[node_index]]
                 else:
-                    pre_rate, pre_burst = self._computeNodeDelay(t, pre_node)
-                    rate += pre_rate
-                    burst += pre_burst
-                break
+                    pre_node = self.node_map[t.path[node_index]]
+                    input_port = self._getPortNumber(t.path_link[node_index-1])[1]
+                    output_port = self._getPortNumber(t.path_link[node_index])[0]
+                    pre_rate, pre_burst = self._computeNodeDelay(t, pre_node, input_port, output_port)
 
-
+                port_rate += pre_rate
+                port_burst += pre_burst
         
-        return rate, burst
+        return port_rate, port_burst
     
-    def _computeDelayBound(self, node: Node):
+    def _computeDelayBound(self, node: Node, arrival_burst):
         if node.serviceCurve is None:
             return None
 
-        arrival_rate, arrival_burst = node.arrivalCurve
         service_rate, service_latency = node.serviceCurve
         
         return arrival_burst / service_rate + service_latency
-        
+    
+    def _getPortNumber(self, link_name):
+        """ Get port number
+
+            Method to get the port number from the link name
+        """
+        if link_name is not None:
+            if "Direct" in link_name:
+                return self.port_map[link_name.replace(" Direct", "")][0], self.port_map[link_name.replace(" Direct", "")][1]  # input port, output port
+            elif "Reverse" in link_name:
+                return self.port_map[link_name.replace(" Reverse", "")][1], self.port_map[link_name.replace(" Reverse", "")][0]  # input port, output port
+        else:
+            return None, None
 
 ################################################################@
 """ Main program """
