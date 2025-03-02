@@ -292,16 +292,16 @@ def createResultsFile (xmlFile: str):
     for flow in flows:
         res.write('\t\t<flow name="' + flow.name + '">\n')
         for target in flow.targets:
-            res.write('\t\t\t<target name="' + target.to + '" value="'+str(ceil(target.delay*1E6))+'" />\n')
+            res.write('\t\t\t<target name="' + target.to + '" value="'+format(target.delay*1E6, '.1f')+'" />\n')
         res.write('\t\t</flow>\n')
     res.write('\t</delays>\n')
 
     # Write load results
     res.write('\t<loads>\n')
     for edge in edges:
-        res.write('\t\t<edge name="' + edge.name + '">\n')
-        res.write('\t\t\t<usage type="direct"  value="'+str(int(edge.load_direct))+'"  percent="'+str(round(edge.load_direct/edge.capacity*100, 1))+'%"/>\n')
-        res.write('\t\t\t<usage type="reverse" value="'+str(int(edge.load_reverse))+'" percent="'+str(round(edge.load_reverse/edge.capacity*100, 1))+'%"/>\n')
+        res.write('\t\t<edge name="' + edge.frm + " => " + edge.to + '">\n')
+        res.write('\t\t\t<usage type="direct"  percent="'+ str(round(edge.load_direct/edge.capacity*100, 1))+'%" value="'+str(float(edge.load_direct))+'"/>\n')
+        res.write('\t\t\t<usage type="reverse" percent="'+ str(round(edge.load_reverse/edge.capacity*100, 1))+'%" value="'+str(float(edge.load_reverse))+'"/>\n')
         res.write('\t\t</edge>\n')
     res.write('\t</loads>\n')
 
@@ -442,7 +442,6 @@ class NetworkCalculus:
                         source_node = self.node_map[node]
 
                         # get the input and output port numbers
-                        input_port = self._getPortNumber(target.path_link[target.path.index(node)-1])[1]
                         output_port = self._getPortNumber(target.path_link[target.path.index(node)])[0]
 
                         # compute delay through the node
